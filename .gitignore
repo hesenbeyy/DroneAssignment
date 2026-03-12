@@ -1,0 +1,12 @@
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+instructor_solution/outputs/
+drone_assignment/.tmp_test_outputs/
+drone_assignment/tests/_tmp_cases/
+drone_assignment/tests/_tmp_outputs/
+
+drone_assignment/*.dot
+drone_assignment/*.png
+drone_assignment/*.svg
