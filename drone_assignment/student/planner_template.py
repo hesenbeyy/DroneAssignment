@@ -143,7 +143,44 @@ def choose_best_action(
     - Use expected utility with your transition/belief assumptions.
     - Return one action that maximizes your objective.
     """
+    R_GOAL = 100.0
+    C_STEP = 1.0
+    C_HAZARD = 20.0
+    R_REWARD_CELL = 5.0
 
+    best_action = None
+    best_utility = -float('inf')
+
+    for action in env.available_actions(state):
+        next_state, obs = env.step(state, action)
+        next_id = env.state_id(next_state)
+
+        p_success = belief.get(next_id, 0.0)
+
+        cost = C_STEP #basic movement cost
+        
+        if hasattr(next_state, "is_hazard") and next_state.is_hazard:
+            cost += C_HAZARD #adds penalty if in hazard
+        
+        reward_cell = 0.0
+        if hasattr(next_state, "is_reward") and next_state.is_reward:
+            reward_cell = R_REWARD_CELL #reward bonus
+
+        battery_penalty = 0.0
+        if next_state.battery <= 0:
+            battery_penalty = 1000.0
+        
+
+        utility = (p_success * R_GOAL - cost + reward_cell - battery_penalty)
+
+        if utility > best_utility:
+            best_utility = utility
+            best_action = action
+    
+    if best_action is None:
+        best_action = env.available_actions(state)[0]
+    
+    return best_action
     raise NotImplementedError("Student task: implement expected-utility action choice.")
 
 
