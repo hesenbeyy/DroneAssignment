@@ -71,7 +71,34 @@ def build_search_tree(
     - Return `(nodes, edges)` in the format expected by `env.viz`.
     """
 
-    raise NotImplementedError("Student task: implement search tree construction.")
+    root_id = "root"
+    root_env_id = env.state_id(start_state)
+
+    nodes: list[tuple[str, str]] = [(root_id, root_env_id)]
+    edges: list[tuple[str, str, str]] = [] 
+
+    frontier = deque()
+    frontier.append((root_id, start_state, 0))
+
+    while frontier:
+        node_id, current_state, depth = frontier.popleft()
+        if depth >= depth_limit or env.is_terminal(current_state):
+            continue
+
+        for action in env.available_actions(current_state):
+            next_state, _ = env.step(current_state, action)
+
+            child_id = f"{node_id}->{action.value}"
+            child_env_id = env.state_id(next_state)
+
+            nodes.append((child_id, child_env_id))
+            edges.append((node_id, child_id, action.value))
+
+            frontier.append((child_id, next_state, depth + 1))
+
+    return nodes, edges
+
+    # raise NotImplementedError("Student task: implement search tree construction.")
 
 
 def bayes_update(
