@@ -98,9 +98,6 @@ def build_search_tree(
 
     return nodes, edges
 
-    # raise NotImplementedError("Student task: implement search tree construction.")
-
-
 def bayes_update(
     prior_survivor: float,
     observation: str,
