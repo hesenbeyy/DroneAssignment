@@ -184,7 +184,6 @@ def choose_best_action(
         if action.value.startswith("MOVE") and next_pos == curr_pos:
             utility -= 200.0
 
-        # 2. Movement Costs
         if action != Action.SCAN and action != Action.RECHARGE:
             utility -= C_STEP
 
@@ -194,7 +193,6 @@ def choose_best_action(
         if next_pos in env._map.reward_cells:
                 utility += R_REWARD_CELL #reward bonus
 
-        # 4. Battery Management
         if next_state.battery <= 0:
             utility -= 2000.0  # Avoid total depletion at all costs
         else:
@@ -213,7 +211,7 @@ def choose_best_action(
             if scan_count >= 2:
                 utility = -500.0
             if current_p > 0.8 or current_p < 0.2:
-                info_gain = -100.0 # We already know enough, stop scanning!
+                info_gain = -100.0
             else:
                 info_gain = (current_p * (1 - current_p)) * 200
            
