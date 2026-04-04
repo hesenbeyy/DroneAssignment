@@ -47,7 +47,9 @@ def build_state_graph(
         for action in env.available_actions(current_state):
             next_state, _ = env.step(current_state, action)
             next_id = env.state_id(next_state)
-        
+
+       
+
             edges.append((current_state_id, next_id, action.value))
             nodes.add(next_id)
 
@@ -75,7 +77,10 @@ def build_search_tree(
     root_env_id = env.state_id(start_state)
 
     nodes: list[tuple[str, str]] = [(root_id, root_env_id)]
-    edges: list[tuple[str, str, str]] = [] 
+
+    edges: list[tuple[str, str, str]] = []
+
+
 
     frontier = deque()
     frontier.append((root_id, start_state, 0))
@@ -101,28 +106,38 @@ def build_search_tree(
 def bayes_update(
     prior_survivor: float,
     observation: str,
-    p_signal_given_survivor_nearby: float, 
+
+    p_signal_given_survivor_nearby: float,
+
     p_signal_given_no_survivor_nearby: float,
 ) -> float:
     """Update `P(survivor)` after a scan observation using Bayes' rule.
-
+    
     TODO:
     - Implement posterior computation for SURVIVOR_SIGNAL and NO_SIGNAL observations.
     - Return the posterior probability in `[0.0, 1.0]`.
     """
     p_s = prior_survivor #P(S)
-    if observation == "SURVIVOR_SIGNAL": 
+
+    if observation == "SURVIVOR_SIGNAL":
+
         p_o_given_s = p_signal_given_survivor_nearby # P(O/S)
         p_o_given_not_s = p_signal_given_no_survivor_nearby # P(O/not S)
     elif observation == "NO_SIGNAL":
         p_o_given_s = 1 - p_signal_given_survivor_nearby # P(O/S)
         p_o_given_not_s = 1- p_signal_given_no_survivor_nearby # P(O/not S)
-    else: 
+
+    else:
+
         raise ValueError("Unknown observation")
-    
+
+   
+
     p_not_s = 1 - p_s
     p_o = p_s * p_o_given_s + p_not_s * p_o_given_not_s
-    
+
+   
+
     if p_o != 0:
         posterior = (p_s * p_o_given_s) / p_o
     else:
@@ -144,43 +159,81 @@ def choose_best_action(
     - Return one action that maximizes your objective.
     """
     R_GOAL = 100.0
-    C_STEP = 1.0
-    C_HAZARD = 20.0
+
+    C_STEP = 2.0
+
+    C_HAZARD = 50.0
+
     R_REWARD_CELL = 5.0
 
     best_action = None
     best_utility = -float('inf')
 
+    curr_pos = (state.row, state.col)
+
     for action in env.available_actions(state):
-        next_state, obs = env.step(state, action)
-        next_id = env.state_id(next_state)
+        next_state, _ = env.step(state, action)
+        next_pos = (next_state.row, next_state.col)
 
-        p_success = belief.get(next_id, 0.0)
+        if action.value == "RECHARGE" and state.battery <= 8:
+            return action
 
-        cost = C_STEP #basic movement cost
-        
-        if hasattr(next_state, "is_hazard") and next_state.is_hazard:
-            cost += C_HAZARD #adds penalty if in hazard
-        
-        reward_cell = 0.0
-        if hasattr(next_state, "is_reward") and next_state.is_reward:
-            reward_cell = R_REWARD_CELL #reward bonus
+        p_survivor = belief.get(next_pos, 0.0)
+        utility = p_survivor * R_GOAL
 
-        battery_penalty = 0.0
+        if action.value.startswith("MOVE") and next_pos == curr_pos:
+            utility -= 200.0
+
+        # 2. Movement Costs
+        if action != Action.SCAN and action != Action.RECHARGE:
+            utility -= C_STEP
+
+        if next_pos in env._map.hazards:
+                utility -= C_HAZARD #adds penalty if in hazard
+
+        if next_pos in env._map.reward_cells:
+                utility += R_REWARD_CELL #reward bonus
+
+        # 4. Battery Management
         if next_state.battery <= 0:
-            battery_penalty = 1000.0
-        
+            utility -= 2000.0  # Avoid total depletion at all costs
+        else:
+            min_distance = min(
+                abs(next_pos[0] - b[0]) + abs(next_pos[1] - b[1])
+                for b in env._map.battery_stations
+            )
+            if state.battery <= 5:
+                #Move closer to the station before battery = 0
+                utility += (10 - min_distance) * 150.0
 
-        utility = (p_success * R_GOAL - cost + reward_cell - battery_penalty)
+        if action == Action.SCAN:
+            current_p = belief.get(curr_pos, 0.3)
+            scan_count = visited.get(curr_pos, 0)
+
+            if scan_count >= 2:
+                utility = -500.0
+            if current_p > 0.8 or current_p < 0.2:
+                info_gain = -100.0 # We already know enough, stop scanning!
+            else:
+                info_gain = (current_p * (1 - current_p)) * 200
+           
+            utility = info_gain - env.scan_cost
+
+        if action == Action.RECHARGE:
+            if state.battery < 10 and curr_pos in env._map.battery_stations:
+                utility = (10 - state.battery) * 50
+            else:
+                utility = -100.0
+
+        visited = belief.get("visited", {})
+        utility -= visited.get(next_pos, 0 ) * 15.0
 
         if utility > best_utility:
             best_utility = utility
             best_action = action
-    
-    if best_action is None:
-        best_action = env.available_actions(state)[0]
-    
-    return best_action
+
+    return best_action if best_action else env.available_actions(state)[0]
+
     raise NotImplementedError("Student task: implement expected-utility action choice.")
 
 
@@ -189,7 +242,6 @@ def student_notes() -> dict[str, Any]:
 
     all good hocam
 
-    
     """
 
     return {}
