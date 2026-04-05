@@ -180,30 +180,30 @@ def main() -> None:
     print(f"Wrote DOT file: {state_dot_path}")
     print(f"Wrote DOT file: {tree_dot_path}")
 
+# ... (previous code in main)
     print("\nChoosing best action")
-    belief = {}
-    belief["visited"] = {}
+    belief = {"visited": {}}
     for row in range(env._map.rows):
         for col in range(env._map.cols):
             belief[(row, col)] = 0.3
-    i = 0
 
     plot_environment_map(env)
 
+    step_count = 0
     while not env.is_terminal(state):
-        if env.is_terminal(state):
-            print("Mission ended.")
-            break
-        
-        action, utility = choose_best_action(env, state, belief)  # unpack (action, utility)
+        # Unpack the tuple correctly
+        action, utility = choose_best_action(env, state, belief)
 
+        # Apply action
         state, obs = env.step(state, action)
-        path.append((state.row, state.col))  # append each step to path
+        path.append((state.row, state.col))
 
-        belief["visited"][(state.row, state.col)] = belief["visited"].get((state.row, state.col), 0) + 1
+        # Update visited count
+        pos = (state.row, state.col)
+        belief["visited"][pos] = belief["visited"].get(pos, 0) + 1
 
+        # Bayes Update
         if action == Action.SCAN and obs in ("SURVIVOR_SIGNAL", "NO_SIGNAL"):
-            pos = (state.row, state.col)
             belief[pos] = bayes_update(
                 prior_survivor=belief[pos],
                 observation=obs,
@@ -211,9 +211,12 @@ def main() -> None:
                 p_signal_given_no_survivor_nearby=0.2,
             )
         
-        print(f"Step {i+1}: Drone chose {action.value} | Utility: {utility:.2f} | Battery: {state.battery}")
-        print(env.render(state))
-        i += 1
+        print(f"Step {step_count+1}: {action.value} | Utility: {utility:.2f} | Batt: {state.battery}")
+        # print(env.render(state)) # Optional: uncomment for text grid each step
+        step_count += 1
+        
+    print(f"Mission finished in {step_count} steps.")
     plot_drone_path(env, path)
+    
 if __name__ == "__main__":
     main()
