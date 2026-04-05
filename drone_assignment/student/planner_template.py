@@ -9,6 +9,7 @@ try:
 except ModuleNotFoundError:
     from env import Action, DroneState, RescueDroneEnv
 
+
 def build_state_graph(
     env: RescueDroneEnv,
     start_state: DroneState,
@@ -37,6 +38,7 @@ def build_state_graph(
                 frontier.append((next_state, depth + 1))
     return nodes, edges
 
+
 def build_search_tree(
     env: RescueDroneEnv,
     start_state: DroneState,
@@ -59,6 +61,7 @@ def build_search_tree(
             frontier.append((child_id, next_state, depth + 1))
     return nodes, edges
 
+
 def bayes_update(
     prior_survivor: float,
     observation: str,
@@ -78,6 +81,7 @@ def bayes_update(
     p_o = (p_s * p_o_given_s) + ((1 - p_s) * p_o_given_not_s)
     return (p_s * p_o_given_s) / p_o if p_o > 0 else prior_survivor
 
+
 def choose_best_action(
     env: RescueDroneEnv,
     state: DroneState,
@@ -87,14 +91,28 @@ def choose_best_action(
     config = getattr(env, "config", None)
     max_batt = config.max_battery if config else 10.0
     depletion_pen = config.battery_depletion_penalty if config else -120.0
-    
+    scan_cost = getattr(config, 'scan_cost', 2.0) if config else 2.0
+
     R_GOAL = 100.0
     visited = belief.get("visited", {})
     curr_pos = (state.row, state.col)
 
-    # Calculate distance to nearest charging station
-    min_dist_to_batt = min([abs(curr_pos[0]-b[0]) + abs(curr_pos[1]-b[1]) for b in env._map.battery_stations]) if env._map.battery_stations else 0
-    battery_urgent = state.battery <= (min_dist_to_batt + 2)
+    # Only consider stations not yet used
+    available_stations = [
+        b for b in env._map.battery_stations
+        if b not in state.used_battery_stations
+    ]
+
+    min_dist_to_batt = min(
+        abs(curr_pos[0] - b[0]) + abs(curr_pos[1] - b[1])
+        for b in available_stations
+    ) if available_stations else float('inf')
+
+    battery_urgent = (
+        bool(available_stations) and
+        state.battery < max_batt and
+        state.battery <= (min_dist_to_batt + 4)
+    )
 
     best_action = None
     best_utility = -float('inf')
@@ -102,44 +120,55 @@ def choose_best_action(
     for action in env.available_actions(state):
         next_state, _ = env.step(state, action)
         next_pos = (next_state.row, next_state.col)
-        
-        # Base utility from belief
-        utility = belief.get(next_pos, 0.3) * R_GOAL
 
-        # Dynamic logic for actions
         if action == Action.RECHARGE:
-            if curr_pos in env._map.battery_stations:
-                utility = (max_batt - state.battery) * 50.0
-                if battery_urgent: utility += 500.0 
+            if curr_pos in env._map.battery_stations and curr_pos not in state.used_battery_stations:
+                battery_missing = max_batt - state.battery
+                utility = battery_missing * 80.0
+                if battery_urgent:
+                    utility += 800.0
             else:
                 utility = -100.0
-        
+
         elif action == Action.SCAN:
             if battery_urgent:
                 utility = -1000.0
             else:
                 p = belief.get(curr_pos, 0.3)
-                utility = (p * (1-p) * 200.0) - getattr(env, 'scan_cost', 2.0)
-                if visited.get(curr_pos, 0) >= 2: utility -= 500.0
+                utility = (p * (1 - p) * 200.0) - scan_cost
+                if visited.get(curr_pos, 0) >= 2:
+                    utility -= 500.0
 
-        # Move penalties/rewards
-        if next_pos == curr_pos and action.value.startswith("MOVE"):
-            utility += getattr(config, 'invalid_move_penalty', -5.0)
-        
-        if next_pos in env._map.hazards:
-            utility += getattr(config, 'hazard_penalty', -35.0)
+        elif action.value.startswith("MOVE"):
+            utility = belief.get(next_pos, 0.3) * R_GOAL
+
+            if battery_urgent and available_stations:
+                next_dist = min(
+                    abs(next_pos[0] - b[0]) + abs(next_pos[1] - b[1])
+                    for b in available_stations
+                )
+                utility += (min_dist_to_batt - next_dist) * 100.0
+
+            if next_pos == curr_pos:
+                utility += getattr(config, 'invalid_move_penalty', -5.0) if config else -5.0
+
+            if next_pos in env._map.hazards:
+                utility += (getattr(config, 'hazard_penalty', -35.0) if config else -35.0) * 2
+
+            utility -= visited.get(next_pos, 0) * 40.0
+
+        else:
+            utility = belief.get(next_pos, 0.3) * R_GOAL
 
         if next_state.battery <= 0:
-            utility += depletion_pen * 10 # Massive penalty for dying
-
-        # Exploration/Distance logic
-        utility -= visited.get(next_pos, 0) * 20.0
+            utility += depletion_pen * 10
 
         if utility > best_utility:
             best_utility = utility
             best_action = action
 
     return (best_action if best_action else Action.WAIT, float(best_utility))
+
 
 def student_notes() -> dict[str, Any]:
     return {"status": "Fixed merge conflicts and return types."}
