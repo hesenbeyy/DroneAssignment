@@ -4,7 +4,7 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import argparse
-from pathlib import Path
+from pathlib import Path 
 
 try:
     from drone_assignment.env import Action, EnvironmentConfig, RescueDroneEnv, get_environment_config
@@ -185,7 +185,7 @@ def main() -> None:
     belief["visited"] = {}
     for row in range(env._map.rows):
         for col in range(env._map.cols):
-            belief[(row, col)] = 0.3
+            belief[(row, col)] = env.config.hazard_prior
     i = 0
 
     plot_environment_map(env)
@@ -207,8 +207,8 @@ def main() -> None:
             belief[pos] = bayes_update(
                 prior_survivor=belief[pos],
                 observation=obs,
-                p_signal_given_survivor_nearby=0.8,
-                p_signal_given_no_survivor_nearby=0.2,
+                p_signal_given_survivor_nearby=0.95,
+                p_signal_given_no_survivor_nearby=0.05,
             )
         
         print(f"Step {i+1}: Drone chose {action.value} | Utility: {utility:.2f} | Battery: {state.battery}")
