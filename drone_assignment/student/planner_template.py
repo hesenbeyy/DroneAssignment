@@ -86,7 +86,7 @@ def choose_best_action(
     env: RescueDroneEnv,
     state: DroneState,
     belief: dict[str, float],
-    lookahead_depth: int = 3,
+    lookahead_depth: int = 4,
 ) -> tuple[Action, float]:
     """Choose action by expected utility with lookahead. Returns (Action, utility_value)."""
 
@@ -95,49 +95,46 @@ def choose_best_action(
             return None
         return min(abs(pos[0] - r) + abs(pos[1] - c) for r, c in cells)
 
-    def _rollout_utility(
-        s: DroneState,
-        depth: int,
-        visited_counts: dict,
-        discount: float = 0.9,
-    ) -> float:
-        """Greedy rollout: accumulate discounted reward up to `depth` steps."""
+    def _hazard_avoidance_penalty(pos: tuple[int, int]) -> float:
+        if pos in env._map.hazards:
+            return -25.0
+        row, col = pos
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            if (row + dr, col + dc) in env._map.hazards:
+                return -8.0
+        return 0.0
+
+    def _step_utility(s: DroneState, a, ns: DroneState, visited_counts: dict) -> float:
+        """Shared utility calculation for both top-level and rollout steps."""
+        r = env.transition_reward(s, a, ns)
+        pos = ns.position
+        survivor_prob = belief.get(pos, 0.0)
+        belief_bonus = survivor_prob * env.config.goal_reward if isinstance(survivor_prob, float) else 0.0
+        revisit_penalty = -3.0 * visited_counts.get(pos, 0)
+        dist = _manhattan_to_nearest(pos, env._map.survivors)
+        proximity_bonus = (8.0 / (dist + 1)) if dist is not None else 0.0
+        hazard_pen = _hazard_avoidance_penalty(pos)
+        battery_urgency = 0.0
+        if ns.battery <= 2:
+            dist_to_b = _manhattan_to_nearest(pos, env._map.battery_stations)
+            if dist_to_b is not None and dist_to_b > ns.battery:
+                battery_urgency = -20.0
+        return r + belief_bonus + revisit_penalty + proximity_bonus + hazard_pen + battery_urgency
+
+    def _rollout_utility(s: DroneState, depth: int, visited_counts: dict, discount: float = 0.9) -> float:
         if depth == 0 or env.is_terminal(s):
-            # Terminal heuristic: reward proximity to survivor zones
             dist = _manhattan_to_nearest(s.position, env._map.survivors)
             proximity_bonus = (10.0 / (dist + 1)) if dist is not None else 0.0
             battery_ratio = s.battery / env.config.max_battery
-            return proximity_bonus + 5.0 * battery_ratio
-        
+            hazard_pen = _hazard_avoidance_penalty(s.position)
+            return proximity_bonus + 5.0 * battery_ratio + hazard_pen
+
         best = float("-inf")
         for a in env.available_actions(s):
             ns, _ = env.step(s, a)
-            r = env.transition_reward(s, a, ns)
-
-            pos = ns.position
-            survivor_prob = belief.get(pos, 0.0)
-            belief_bonus = survivor_prob * env.config.goal_reward if isinstance(survivor_prob, float) else 0.0
-
-            visit_count = visited_counts.get(pos, 0)
-            revisit_penalty = -3.0 * visit_count
-
-            # Distance shaping: reward getting closer to survivor zones
-            dist = _manhattan_to_nearest(pos, env._map.survivors)
-            proximity_bonus = (8.0 / (dist + 1)) if dist is not None else 0.0
-
-            # Battery conservation: penalize low battery far from recharge
-            battery_urgency = 0.0
-            if ns.battery <= 2:
-                dist_to_b = _manhattan_to_nearest(pos, env._map.battery_stations)
-                if dist_to_b is not None and dist_to_b > ns.battery:
-                    battery_urgency = -20.0  # Can't reach recharge in time
-
-            step_utility = r + belief_bonus + revisit_penalty + proximity_bonus + battery_urgency
-            future = discount * _rollout_utility(ns, depth - 1, visited_counts, discount)
-            total = step_utility + future
+            total = _step_utility(s, a, ns, visited_counts) + discount * _rollout_utility(ns, depth - 1, visited_counts, discount)
             if total > best:
                 best = total
-
         return best
 
     visited: dict[tuple[int, int], int] = belief.get("visited", {})
@@ -146,28 +143,7 @@ def choose_best_action(
 
     for action in env.available_actions(state):
         next_state, _ = env.step(state, action)
-        r = env.transition_reward(state, action, next_state)
-
-        pos = next_state.position
-        survivor_prob = belief.get(pos, 0.0)
-        belief_bonus = survivor_prob * env.config.goal_reward if isinstance(survivor_prob, float) else 0.0
-
-        visit_count = visited.get(pos, 0)
-        revisit_penalty = -3.0 * visit_count
-
-        dist = _manhattan_to_nearest(pos, env._map.survivors)
-        proximity_bonus = (8.0 / (dist + 1)) if dist is not None else 0.0
-
-        battery_urgency = 0.0
-        if next_state.battery <= 2:
-            dist_to_b = _manhattan_to_nearest(pos, env._map.battery_stations)
-            if dist_to_b is not None and dist_to_b > next_state.battery:
-                battery_urgency = -20.0
-
-        immediate = r + belief_bonus + revisit_penalty + proximity_bonus + battery_urgency
-        future = 0.9 * _rollout_utility(next_state, lookahead_depth - 1, visited)
-        utility = immediate + future
-
+        utility = _step_utility(state, action, next_state, visited) + 0.9 * _rollout_utility(next_state, lookahead_depth - 1, visited)
         if utility > best_utility:
             best_utility = utility
             best_action = action
