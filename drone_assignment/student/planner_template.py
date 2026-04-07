@@ -96,12 +96,16 @@ def choose_best_action(
         return min(abs(pos[0] - r) + abs(pos[1] - c) for r, c in cells)
 
     def _hazard_avoidance_penalty(pos: tuple[int, int]) -> float:
+        direct_penalty = env.config.hazard_penalty * env.config.hazard_prior 
+        adjacent_penalty = direct_penalty * 0.4
+
         if pos in env._map.hazards:
-            return -25.0
+            return  direct_penalty
         row, col = pos
         for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             if (row + dr, col + dc) in env._map.hazards:
-                return -8.0
+                return adjacent_penalty
+            
         return 0.0
 
     def _step_utility(s: DroneState, a, ns: DroneState, visited_counts: dict) -> float:
@@ -118,7 +122,7 @@ def choose_best_action(
         if ns.battery <= 2:
             dist_to_b = _manhattan_to_nearest(pos, env._map.battery_stations)
             if dist_to_b is not None and dist_to_b > ns.battery:
-                battery_urgency = -20.0
+                battery_urgency = env.config.battery_depletion_penalty * 0.2
         return r + belief_bonus + revisit_penalty + proximity_bonus + hazard_pen + battery_urgency
 
     def _rollout_utility(s: DroneState, depth: int, visited_counts: dict, discount: float = 0.9) -> float:
