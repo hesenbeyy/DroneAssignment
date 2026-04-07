@@ -88,86 +88,8 @@ def choose_best_action(
     belief: dict[str, float],
 ) -> tuple[Action, float]:
     """Choose action by expected utility. Returns (Action, utility_value)."""
-    config = getattr(env, "config", None)
-    max_batt = config.max_battery if config else 10.0
-    depletion_pen = config.battery_depletion_penalty if config else -120.0
-    scan_cost = getattr(config, 'scan_cost', 2.0) if config else 2.0
-
-    R_GOAL = 100.0
-    visited = belief.get("visited", {})
-    curr_pos = (state.row, state.col)
-
-    # Only consider stations not yet used
-    available_stations = [
-        b for b in env._map.battery_stations
-        if b not in state.used_battery_stations
-    ]
-
-    min_dist_to_batt = min(
-        abs(curr_pos[0] - b[0]) + abs(curr_pos[1] - b[1])
-        for b in available_stations
-    ) if available_stations else float('inf')
-
-    battery_urgent = (
-        bool(available_stations) and
-        state.battery < max_batt and
-        state.battery <= (min_dist_to_batt + 4)
-    )
-
-    best_action = None
-    best_utility = -float('inf')
-
-    for action in env.available_actions(state):
-        next_state, _ = env.step(state, action)
-        next_pos = (next_state.row, next_state.col)
-
-        if action == Action.RECHARGE:
-            if curr_pos in env._map.battery_stations and curr_pos not in state.used_battery_stations:
-                battery_missing = max_batt - state.battery
-                utility = battery_missing * 80.0
-                if battery_urgent:
-                    utility += 800.0
-            else:
-                utility = -100.0
-
-        elif action == Action.SCAN:
-            if battery_urgent:
-                utility = -1000.0
-            else:
-                p = belief.get(curr_pos, 0.3)
-                utility = (p * (1 - p) * 200.0) - scan_cost
-                if visited.get(curr_pos, 0) >= 2:
-                    utility -= 500.0
-
-        elif action.value.startswith("MOVE"):
-            utility = belief.get(next_pos, 0.3) * R_GOAL
-
-            if battery_urgent and available_stations:
-                next_dist = min(
-                    abs(next_pos[0] - b[0]) + abs(next_pos[1] - b[1])
-                    for b in available_stations
-                )
-                utility += (min_dist_to_batt - next_dist) * 100.0
-
-            if next_pos == curr_pos:
-                utility += getattr(config, 'invalid_move_penalty', -5.0) if config else -5.0
-
-            if next_pos in env._map.hazards:
-                utility += (getattr(config, 'hazard_penalty', -35.0) if config else -35.0) * 2
-
-            utility -= visited.get(next_pos, 0) * 40.0
-
-        else:
-            utility = belief.get(next_pos, 0.3) * R_GOAL
-
-        if next_state.battery <= 0:
-            utility += depletion_pen * 10
-
-        if utility > best_utility:
-            best_utility = utility
-            best_action = action
-
-    return (best_action if best_action else Action.WAIT, float(best_utility))
+    
+    raise NotImplementedError("Implement this function to choose the best action based on expected utility.")
 
 
 def student_notes() -> dict[str, Any]:
