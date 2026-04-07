@@ -10,3 +10,5 @@ drone_assignment/tests/_tmp_outputs/
 drone_assignment/*.dot
 drone_assignment/*.png
 drone_assignment/*.svg
+
+.vscode/
