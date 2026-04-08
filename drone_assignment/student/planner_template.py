@@ -6,8 +6,10 @@ from collections import deque
 
 try:
     from drone_assignment.env import Action, DroneState, RescueDroneEnv
+    from drone_assignment.env import observation_model
 except ModuleNotFoundError:
     from env import Action, DroneState, RescueDroneEnv
+    import env.observation_model as observation_model
 
 
 def build_state_graph(
@@ -68,18 +70,25 @@ def bayes_update(
     p_signal_given_survivor_nearby: float,
     p_signal_given_no_survivor_nearby: float,
 ) -> float:
-    p_s = prior_survivor
+    probability_survivor = prior_survivor
     if observation == "SURVIVOR_SIGNAL":
-        p_o_given_s = p_signal_given_survivor_nearby
-        p_o_given_not_s = p_signal_given_no_survivor_nearby
+        probability_observation_given_survivor = p_signal_given_survivor_nearby
+        probability_observation_given_no_survivor = p_signal_given_no_survivor_nearby
     elif observation == "NO_SIGNAL":
-        p_o_given_s = 1 - p_signal_given_survivor_nearby
-        p_o_given_not_s = 1 - p_signal_given_no_survivor_nearby
+        probability_observation_given_survivor = 1 - p_signal_given_survivor_nearby
+        probability_observation_given_no_survivor = 1 - p_signal_given_no_survivor_nearby
     else:
         return prior_survivor
 
-    p_o = (p_s * p_o_given_s) + ((1 - p_s) * p_o_given_not_s)
-    return (p_s * p_o_given_s) / p_o if p_o > 0 else prior_survivor
+    probability_observation = (
+        (probability_survivor * probability_observation_given_survivor)
+        + ((1 - probability_survivor) * probability_observation_given_no_survivor)
+    )
+    return (
+        (probability_survivor * probability_observation_given_survivor) / probability_observation
+        if probability_observation > 0
+        else prior_survivor
+    )
 
 
 def choose_best_action(
@@ -90,53 +99,69 @@ def choose_best_action(
 ) -> tuple[Action, float]:
     """Choose action by expected utility with lookahead. Returns (Action, utility_value)."""
 
-    def _manhattan_to_nearest(pos: tuple[int, int], cells: frozenset) -> int | None:
+    def _manhattan_to_nearest(position: tuple[int, int], cells: frozenset) -> int | None:
+        """Thin wrapper: converts a (row, col) position into a DroneState-like
+        object so we can reuse observation_model._distance_to_nearest."""
         if not cells:
             return None
-        return min(abs(pos[0] - r) + abs(pos[1] - c) for r, c in cells)
+        # observation_model._distance_to_nearest expects an object with .row/.col
+        class _PosProxy:
+            def __init__(self, row, col):
+                self.row = row
+                self.col = col
+        return observation_model._distance_to_nearest(_PosProxy(*position), cells)
 
-    def _hazard_avoidance_penalty(pos: tuple[int, int]) -> float:
-        direct_penalty = env.config.hazard_penalty * env.config.hazard_prior 
-        adjacent_penalty = direct_penalty * 0.4
+    def _hazard_penalty(position: tuple[int, int]) -> float:
+        """Use observation_model.hazard_warning_probability to penalise proximity
+        to active hazards. Returns a negative penalty value."""
+        class _PosProxy:
+            def __init__(self, row, col):
+                self.row = row
+                self.col = col
+        active_hazards = list(env._map.hazards) if hasattr(env._map, "hazards") else []
+        p_hazard = observation_model.hazard_warning_probability(
+            _PosProxy(*position), active_hazards
+        )
+        # Scale into a penalty: max ~-8.5 when p_hazard == 1.0
+        return -10.0 * p_hazard
 
-        if pos in env._map.hazards:
-            return  direct_penalty
-        row, col = pos
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            if (row + dr, col + dc) in env._map.hazards:
-                return adjacent_penalty
-            
-        return 0.0
-
-    def _step_utility(s: DroneState, a, ns: DroneState, visited_counts: dict) -> float:
-        """Shared utility calculation for both top-level and rollout steps."""
-        r = env.transition_reward(s, a, ns)
-        pos = ns.position
-        survivor_prob = belief.get(pos, 0.0)
+    def _step_utility(
+        state: DroneState,
+        action: Action,
+        next_state: DroneState,
+        visited_counts: dict,
+    ) -> float:
+        reward = env.transition_reward(state, action, next_state)
+        position = next_state.position
+        survivor_prob = belief.get(position, 0.0)
         belief_bonus = survivor_prob * env.config.goal_reward if isinstance(survivor_prob, float) else 0.0
-        revisit_penalty = -3.0 * visited_counts.get(pos, 0)
-        dist = _manhattan_to_nearest(pos, env._map.survivors)
-        proximity_bonus = (8.0 / (dist + 1)) if dist is not None else 0.0
-        hazard_pen = _hazard_avoidance_penalty(pos)
+        revisit_penalty = -3.0 * visited_counts.get(position, 0)
+        distance = _manhattan_to_nearest(position, env._map.survivors)
+        proximity_bonus = (8.0 / (distance + 1)) if distance is not None else 0.0
+        hazard_penalty = _hazard_penalty(position)
         battery_urgency = 0.0
-        if ns.battery <= 2:
-            dist_to_b = _manhattan_to_nearest(pos, env._map.battery_stations)
-            if dist_to_b is not None and dist_to_b > ns.battery:
+        if next_state.battery <= 2:
+            distance_to_battery = _manhattan_to_nearest(position, env._map.battery_stations)
+            if distance_to_battery is not None and distance_to_battery > next_state.battery:
                 battery_urgency = env.config.battery_depletion_penalty * 0.2
-        return r + belief_bonus + revisit_penalty + proximity_bonus + hazard_pen + battery_urgency
+        return reward + belief_bonus + revisit_penalty + proximity_bonus + hazard_penalty + battery_urgency
 
-    def _rollout_utility(s: DroneState, depth: int, visited_counts: dict, discount: float = 0.9) -> float:
-        if depth == 0 or env.is_terminal(s):
-            dist = _manhattan_to_nearest(s.position, env._map.survivors)
-            proximity_bonus = (10.0 / (dist + 1)) if dist is not None else 0.0
-            battery_ratio = s.battery / env.config.max_battery
-            hazard_pen = _hazard_avoidance_penalty(s.position)
-            return proximity_bonus + 5.0 * battery_ratio + hazard_pen
+    def _rollout_utility(
+        state: DroneState, depth: int, visited_counts: dict, discount: float = 0.9
+    ) -> float:
+        if depth == 0 or env.is_terminal(state):
+            distance = _manhattan_to_nearest(state.position, env._map.survivors)
+            proximity_bonus = (10.0 / (distance + 1)) if distance is not None else 0.0
+            battery_ratio = state.battery / env.config.max_battery
+            hazard_penalty = _hazard_penalty(state.position)
+            return proximity_bonus + 5.0 * battery_ratio + hazard_penalty
 
         best = float("-inf")
-        for a in env.available_actions(s):
-            ns, _ = env.step(s, a)
-            total = _step_utility(s, a, ns, visited_counts) + discount * _rollout_utility(ns, depth - 1, visited_counts, discount)
+        for action in env.available_actions(state):
+            next_state, _ = env.step(state, action)
+            total = _step_utility(state, action, next_state, visited_counts) + discount * _rollout_utility(
+                next_state, depth - 1, visited_counts, discount
+            )
             if total > best:
                 best = total
         return best
@@ -147,7 +172,9 @@ def choose_best_action(
 
     for action in env.available_actions(state):
         next_state, _ = env.step(state, action)
-        utility = _step_utility(state, action, next_state, visited) + 0.9 * _rollout_utility(next_state, lookahead_depth - 1, visited)
+        utility = _step_utility(state, action, next_state, visited) + 0.9 * _rollout_utility(
+            next_state, lookahead_depth - 1, visited
+        )
         if utility > best_utility:
             best_utility = utility
             best_action = action
@@ -160,4 +187,4 @@ def choose_best_action(
 
 
 def student_notes() -> dict[str, Any]:
-    return {"status": "Fixed merge conflicts and return types."}
+    return {"all good hocam"}
